@@ -1,14 +1,31 @@
 import pandas as pd
 import numpy as np
 import string
+import os
+from pathlib import Path
 from nltk.stem.snowball import SnowballStemmer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+from tqdm import tqdm #used for the progress bar
+
+#TODO: for similarity matrices, drop rows where similarity score is below a certain threshold in order to reduce the size of the matrices
 
 class MoviesPreprocessor:
-    def __init__(self, data_path='C:/Coding Projects/Movie-Recommender-Engine/data/'):
-        self.data_path = data_path
+    def __init__(self):
+        #Project directory is 2 levels up from this file
+        self.project_root = Path(__file__).parent.parent.parent
+        self.data_path = self.project_root / 'data'
+        self.output_path = self.project_root / 'data_cleaned'
+        
+        #Delete the output directory if it already exists
+        if self.output_path.exists():
+            print(f"Removing existing output directory: {self.output_path}")
+            self.output_path.rmdir()
+        
+        self.output_path.mkdir()
+        
         self.stemmer = SnowballStemmer('english')
+        
         self.movies = None
         self.keywords = None
         self.credits = None
@@ -20,22 +37,27 @@ class MoviesPreprocessor:
         self.movie_ratings = None
         
     def load_movies_dataset(self):
-        self.movies = pd.read_csv('C:/Coding Projects/Movie-Recommender-Engine/data/movies_metadata.csv')
+        print("Loading movies dataset...")
+        self.movies = pd.read_csv(self.data_path / 'movies_metadata.csv')
 
     def load_links_dataset(self):
-        self.links = pd.read_csv('C:/Coding Projects/Movie-Recommender-Engine/data/links_small.csv')
+        print("Loading links dataset...")
+        self.links = pd.read_csv(self.data_path / 'links_small.csv')
         #Clean the links dataset
         self.links = self.links[self.links['tmdbId'].notnull()]
         self.links['tmdbId'] = self.links['tmdbId'].astype(int)
 
     def load_keywords_dataset(self):
-        self.keywords = pd.read_csv('C:/Coding Projects/Movie-Recommender-Engine/data/keywords.csv')
+        print("Loading keywords dataset...")
+        self.keywords = pd.read_csv(self.data_path / 'keywords.csv')
 
     def load_credits_dataset(self):
-        self.credits = pd.read_csv('C:/Coding Projects/Movie-Recommender-Engine/data/credits.csv')
+        print("Loading credits dataset...")
+        self.credits = pd.read_csv(self.data_path / 'credits.csv')
 
     def load_movie_ratings_dataset(self):
-        self.movie_ratings = pd.read_csv(f'C:/Coding Projects/Movie-Recommender-Engine/data/ratings_small.csv')
+        print("Loading movie ratings dataset...")
+        self.movie_ratings = pd.read_csv(self.data_path / 'ratings_small.csv')
 
     def load_all_datasets(self):
         self.load_movies_dataset()
@@ -45,6 +67,7 @@ class MoviesPreprocessor:
         self.load_movie_ratings_dataset()
     
     def clean_movies(self):
+        print("Cleaning movies dataset...")
         # Rename 'id' column to 'tmdb_id'
         self.movies = self.movies.rename(columns={'id': 'tmdb_id'})
 
@@ -106,6 +129,7 @@ class MoviesPreprocessor:
         self.movies.drop(columns=['vote_count', 'vote_average'], inplace=True, errors='ignore')
 
     def clean_keywords(self):
+        print("Cleaning keywords dataset...")
         #Convert the keywords column from a json object to a list of dictionaries
         self.keywords['keywords'] = self.keywords['keywords'].apply(lambda element: eval(element))
         
@@ -128,6 +152,7 @@ class MoviesPreprocessor:
 
 
     def clean_credits(self):
+        print("Cleaning credits dataset...")
         #Convert the cast and crew columns from a json object to a list of dictionaries
         self.credits['cast'] = self.credits['cast'].apply(lambda element: eval(element))
         self.credits['crew'] = self.credits['crew'].apply(lambda element: eval(element))
@@ -161,6 +186,7 @@ class MoviesPreprocessor:
 
     
     def clean_movie_ratings(self):
+        print("Cleaning movie ratings dataset...")
         # Rename movieId to tmdb_id first
         self.movie_ratings.rename(columns={'movieId': 'tmdb_id'}, inplace=True)
         
@@ -172,6 +198,7 @@ class MoviesPreprocessor:
 
 
     def merge_datasets(self):
+        print("Merging datasets...")
         self.movies = self.movies.merge(self.keywords, on = 'tmdb_id', how = 'inner')  
         self.movies = self.movies.merge(self.credits.loc[:, ['tmdb_id', 'actors', 'director']], on='tmdb_id', how='left')
         
@@ -181,6 +208,7 @@ class MoviesPreprocessor:
 
 
     def create_movie_genre_similarity_matrix(self):
+        print("Creating movie genre similarity matrix...")
         #Turn the entries of the genres column into a single string, where individual genres are seperated by spaces
         genres = self.movies['genres'].apply(lambda l: ' '.join(l) if isinstance(l, list) else '')
 
@@ -206,6 +234,7 @@ class MoviesPreprocessor:
     
     
     def create_movie_crew_similarity_matrix(self):
+        print("Creating movie crew similarity matrix...")
         #Combine the entries of the director and actors columns into a single list, then merge that list into a string
         crew = self.movies.apply(lambda row: row['director'] + row['actors'], axis=1)
         crew = crew.apply(lambda x: ' '.join(x))
@@ -229,6 +258,7 @@ class MoviesPreprocessor:
 
 
     def create_movie_content_similarity_matrix(self):
+        print("Creating movie content similarity matrix...")
         #Create a content series by combining the keywords with the overview column, giving overview a higher weight
         content = self.movies.apply(lambda row: row['keywords'] + row['overview'] * 2, axis = 1)
         content = content.apply(lambda x: ' '.join(x))
@@ -249,6 +279,7 @@ class MoviesPreprocessor:
         
 
     def create_movie_rating_similarity_matrix(self):
+        print("Creating movie rating similarity matrix...")
         correlation_matrix = self.movie_ratings.corr(method = 'pearson', min_periods = 7)
         correlation_matrix.index.name = 'movie1_id'
         correlation_matrix.columns.name = 'movie2_id'
@@ -260,12 +291,14 @@ class MoviesPreprocessor:
         self.ratings_sims = ratings_sims[(ratings_sims['movie1_id'] != ratings_sims['movie2_id']) & (ratings_sims['similarity_score'] > 0.0)]
 
     def update_movies_dataset(self):
+        print("Updating movies dataset...")
         #Don't need the overview and keywords columns after the similarity matrices are created
         self.movies = self.movies.drop(columns = ['overview', 'keywords'])
         self.movies = self.movies.drop_duplicates(subset = ['tmdb_id'])
 
 
     def replace_nan_with_none(self):
+        print("Replacing NaN with '\\N'...")
         #Replace NaN values with '\\N' to be compatible with MySQL
         self.movies.fillna(value = '\\N', inplace = True)
         self.genres_sims.fillna(value = '\\N', inplace = True)
@@ -275,6 +308,7 @@ class MoviesPreprocessor:
 
     
     def enforce_foreign_keys(self):
+        print("Enforcing foreign keys...")
         # movies_cleaned.csv contain the primary key (tmdb_id) for the other tables
         # The other tables' foreign keys (movie1_id and movie2_id) should only contain values of tmdb_id that appear in movies_cleaned.csv
         valid_ids = set(pd.to_numeric(self.movies['tmdb_id'], errors='coerce').dropna().astype(int).values)
@@ -302,39 +336,64 @@ class MoviesPreprocessor:
         self.content_sims = _coerce_and_filter(self.content_sims, ['movie1_id', 'movie2_id'])
         self.ratings_sims = _coerce_and_filter(self.ratings_sims, ['movie1_id', 'movie2_id'])
 
+    def deduplicate_similarity_pairs(self):
+        """Remove symmetric duplicates by canonicalizing pairs so movie1_id < movie2_id"""
+        def _dedupe(df):
+            # Canonical order: ensure movie1_id < movie2_id
+            min_ids = df.loc[:, ['movie1_id', 'movie2_id']].min(axis=1) #goes row by row and chooses the smaller of movie1_id and movie2_id, returning a series
+            max_ids = df.loc[:, ['movie1_id', 'movie2_id']].max(axis=1) #goes row by row and chooses the larger of movie1_id and movie2_id, returning a series
+            
+            #create a deep copy of the dataframe to do the deduplication operation on
+            df = df.copy()
+            df['movie1_id'] = min_ids
+            df['movie2_id'] = max_ids
+            #Now, the movie1_id column will contain the smaller of the two ids and the movie2_id column will contain the larger of the two ids
+            
+            # Keep one row per unordered pair, prefer highest similarity if available
+            df = df.sort_values('similarity_score', ascending=False).drop_duplicates(subset=['movie1_id', 'movie2_id'], keep='first')
+            return df
+
+        # Apply to all similarity DataFrames
+        self.genres_sims = _dedupe(self.genres_sims)
+        self.crew_sims = _dedupe(self.crew_sims)
+        self.content_sims = _dedupe(self.content_sims)
+        self.ratings_sims = _dedupe(self.ratings_sims)
+
     def execute_preprocessing_pipeline(self):
-        self.load_all_datasets()
-        
-        self.clean_movies()
-        self.clean_keywords()
-        self.clean_credits()
-        self.clean_movie_ratings()
+        #Preprocessing pipeline order
+        steps = [
+            self.load_all_datasets,
+            self.clean_movies,
+            self.clean_keywords,
+            self.clean_credits,
+            self.clean_movie_ratings,
+            self.merge_datasets,
+            self.create_movie_genre_similarity_matrix,
+            self.create_movie_crew_similarity_matrix,
+            self.create_movie_content_similarity_matrix,
+            self.create_movie_rating_similarity_matrix,
+            self.update_movies_dataset,
+            self.enforce_foreign_keys,
+            self.deduplicate_similarity_pairs,
+            self.replace_nan_with_none
+        ]
 
-        self.merge_datasets()
-
-        self.create_movie_genre_similarity_matrix()
-        self.create_movie_crew_similarity_matrix()
-        self.create_movie_content_similarity_matrix()
-        self.create_movie_rating_similarity_matrix()
-
-        self.update_movies_dataset()
-
-        # Ensure FK integrity before exporting
-        self.enforce_foreign_keys()
-
-        self.replace_nan_with_none()
+        # Iterate with progress bar
+        for step in tqdm(steps, desc="Preprocessing Pipeline Progress"):
+            step()  # execute the method
 
 
 if __name__ == '__main__':
     preprocessor = MoviesPreprocessor()
     preprocessor.execute_preprocessing_pipeline()
-    print(preprocessor.movies.head())
+    #print(preprocessor.movies.head())
     
-    preprocessor.movies.to_csv('C:/Coding Projects/Movie-Recommender-Engine/data/movies_cleaned.csv', index = False)
-    preprocessor.genres_sims.to_csv('C:/Coding Projects/Movie-Recommender-Engine/data/genres_sims_cleaned.csv', index = False)
-    preprocessor.crew_sims.to_csv('C:/Coding Projects/Movie-Recommender-Engine/data/crew_sims_cleaned.csv', index = False)
-    preprocessor.content_sims.to_csv('C:/Coding Projects/Movie-Recommender-Engine/data/content_sims_cleaned.csv', index = False)
-    preprocessor.ratings_sims.to_csv('C:/Coding Projects/Movie-Recommender-Engine/data/ratings_sims_cleaned.csv', index = False)
+    # Export cleaned data using relative paths
+    preprocessor.movies.to_csv(preprocessor.output_path / 'movies_cleaned.csv', index=False)
+    preprocessor.genres_sims.to_csv(preprocessor.output_path / 'genres_sims_cleaned.csv', index=False)
+    preprocessor.crew_sims.to_csv(preprocessor.output_path / 'crew_sims_cleaned.csv', index=False)
+    preprocessor.content_sims.to_csv(preprocessor.output_path / 'content_sims_cleaned.csv', index=False)
+    preprocessor.ratings_sims.to_csv(preprocessor.output_path / 'ratings_sims_cleaned.csv', index=False)
     
 
        

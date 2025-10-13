@@ -262,6 +262,9 @@ class MoviesPreprocessor:
             #Drop entries where similarity is 0 or similarity is calculated between the same movies
             chunk_similarities = chunk_similarities[(chunk_similarities['movie1_id'] != chunk_similarities['movie2_id']) & (chunk_similarities['similarity_score'] > 0.0)]
 
+            #clip the similarity scores to a valid range of [-1, 1] in case floating-point precision errors occur
+            chunk_similarities['similarity_score'] = chunk_similarities['similarity_score'].clip(-1.0, 1.0)
+
             #Drop entries where the similarit score is below the threshold
             chunk_similarities = chunk_similarities[chunk_similarities['similarity_score'] >= self.similarity_threshold]
             
@@ -358,6 +361,9 @@ class MoviesPreprocessor:
 
         ratings_sims = correlation_matrix.stack().reset_index()
         ratings_sims.columns = ['movie1_id', 'movie2_id', 'similarity_score']
+
+        #clip the similarity scores to a valid range of [-1, 1] in case floating-point precision errors occur
+        ratings_sims['similarity_score'] = ratings_sims['similarity_score'].clip(-1.0, 1.0)
 
         #Drop rows where similarity score is 0 (no similarity) or similarity is calculated between the same movies for storage efficiency
         self.ratings_sims = ratings_sims[(ratings_sims['movie1_id'] != ratings_sims['movie2_id']) & (ratings_sims['similarity_score'] > 0.0)]

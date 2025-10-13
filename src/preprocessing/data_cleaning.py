@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import string
 import os
+import shutil
 from pathlib import Path
 from nltk.stem.snowball import SnowballStemmer
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -20,7 +21,7 @@ class MoviesPreprocessor:
         #Delete the output directory if it already exists
         if self.output_path.exists():
             print(f"Removing existing output directory: {self.output_path}")
-            self.output_path.rmdir()
+            shutil.rmtree(self.output_path) #recursively remove the directory and everything in the directory
         
         self.output_path.mkdir()
         
@@ -60,6 +61,7 @@ class MoviesPreprocessor:
         self.movie_ratings = pd.read_csv(self.data_path / 'ratings_small.csv')
 
     def load_all_datasets(self):
+        print("Loading all datasets...")
         self.load_movies_dataset()
         self.load_links_dataset()
         self.load_keywords_dataset()
@@ -338,6 +340,7 @@ class MoviesPreprocessor:
 
     def deduplicate_similarity_pairs(self):
         """Remove symmetric duplicates by canonicalizing pairs so movie1_id < movie2_id"""
+        print("Deduplicating similarity pairs...")
         def _dedupe(df):
             # Canonical order: ensure movie1_id < movie2_id
             min_ids = df.loc[:, ['movie1_id', 'movie2_id']].min(axis=1) #goes row by row and chooses the smaller of movie1_id and movie2_id, returning a series
@@ -359,6 +362,18 @@ class MoviesPreprocessor:
         self.content_sims = _dedupe(self.content_sims)
         self.ratings_sims = _dedupe(self.ratings_sims)
 
+    def filter_similarity_matrix(self):
+        """Filter the similarity matrices to only include rows where the similarity score is greater than or equal to the threshold (if the similarity score is below the threshold, the similarity is considered)"""
+        def _filter(df, threshold):
+            df = df[df['similarity_score'] >= threshold]
+            return df
+        print("Filtering similarity matrices...")
+        self.genres_sims = _filter(self.genres_sims, 0.1)
+        self.crew_sims = _filter(self.crew_sims, 0.1)
+        self.content_sims = _filter(self.content_sims, 0.1)
+        self.ratings_sims = _filter(self.ratings_sims, 0.1)
+
+
     def execute_preprocessing_pipeline(self):
         #Preprocessing pipeline order
         steps = [
@@ -375,6 +390,7 @@ class MoviesPreprocessor:
             self.update_movies_dataset,
             self.enforce_foreign_keys,
             self.deduplicate_similarity_pairs,
+            self.filter_similarity_matrix,
             self.replace_nan_with_none
         ]
 

@@ -5,6 +5,7 @@ Dataset: https://www.kaggle.com/datasets/rounakbanik/the-movies-dataset
 
 from pathlib import Path
 import kaggle
+import shutil
 
 def check_kaggle_setup():
     try:
@@ -53,7 +54,7 @@ def main():
     #delete the input directory if it already exists
     if input_dir.exists():
             print(f"Removing existing input directory: {input_dir}")
-            input_dir.rmdir()
+            shutil.rmtree(input_dir) #recursively remove the directory and everything in the directory
     
     #create the input directory
     input_dir.mkdir()

@@ -8,8 +8,13 @@ from nltk.stem.snowball import SnowballStemmer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm #used for the progress bar
+from enum import Enum
 
 #TODO: for similarity matrices, drop rows where similarity score is below a certain threshold in order to reduce the size of the matrices
+
+class SimilarityMethod(Enum):
+    COSINE_SIMILARITY = 'cosine-similarity'
+    PEARSON_CORRELATION = 'pearson-correlation'
 
 class MoviesPreprocessor:
     def __init__(self):
@@ -36,6 +41,10 @@ class MoviesPreprocessor:
         self.crew_sims = None
         self.ratings_sims = None
         self.movie_ratings = None
+        
+        # Chunking parameters for memory efficiency
+        self.chunk_size = 1000  # Process 1000 movies at a time
+        self.similarity_threshold = 0.1  # Filter out similarities below this threshold
         
     def load_movies_dataset(self):
         print("Loading movies dataset...")
@@ -130,6 +139,7 @@ class MoviesPreprocessor:
         # Drop the vote_count and vote_average columns after calculating the imdb score
         self.movies.drop(columns=['vote_count', 'vote_average'], inplace=True, errors='ignore')
 
+
     def clean_keywords(self):
         print("Cleaning keywords dataset...")
         #Convert the keywords column from a json object to a list of dictionaries
@@ -186,7 +196,7 @@ class MoviesPreprocessor:
         self.credits['director'] = self.credits['director'] * 2
         self.credits.head()
 
-    
+
     def clean_movie_ratings(self):
         print("Cleaning movie ratings dataset...")
         # Rename movieId to tmdb_id first
@@ -208,6 +218,60 @@ class MoviesPreprocessor:
         self.movies['actors'] = self.movies['actors'].apply(lambda x: x if isinstance(x, list) else [])
         self.movies['director'] = self.movies['director'].apply(lambda x: x if isinstance(x, list) else [])
 
+    def compute_chunked_similarity(self, df, method = SimilarityMethod.COSINE_SIMILARITY):
+        """
+        Compute cosine similarity in chunks to avoid memory overload.
+        Returns a DataFrame with columns: movie1_id, movie2_id, similarity_score
+        """
+
+        n_movies = df.shape[0] #gets the number of rows/entries in the similarity matrix
+        similarity_results = []
+        
+        for chunk_start in range(0, n_movies, self.chunk_size):
+            chunk_end = min(chunk_start + self.chunk_size, n_movies)
+            chunk = df[chunk_start:chunk_end]
+            
+            chunk_similarities_matrix = pd.DataFrame(cosine_similarity(chunk, df, dense_output = True))
+            chunk_similarities_matrix.index = self.movies['tmdb_id'][chunk_start:chunk_end].values #rows correspond to the movies in the current chunk
+            chunk_similarities_matrix.columns = self.movies['tmdb_id'].values  # columns correspond to all the movies in the dataset
+            
+            #Reshape the similarity matrix to have columns (movie1_id, movie2_id, similarity_score)
+            chunk_similarities = chunk_similarities_matrix.stack().reset_index()
+            chunk_similarities.columns = ['movie1_id', 'movie2_id', 'similarity_score']
+            """
+            Original similarity matrix (dataframe):
+                  m1  m2
+            m1   1.0  0.3
+            m2   0.3  1.0
+
+            After stack (multi-index series):
+            m1  m1    1.0
+                m2    0.3
+            m2  m1    0.3
+                m2    1.0
+
+            After reset_index (dataframe):
+               movie1_id movie2_id  similarity_score
+            0     m1       m1  1.0
+            1     m1       m2  0.3
+            2     m2       m1  0.3
+            3     m2       m2  1.0
+
+            """
+
+            #Drop entries where similarity is 0 or similarity is calculated between the same movies
+            chunk_similarities = chunk_similarities[(chunk_similarities['movie1_id'] != chunk_similarities['movie2_id']) & (chunk_similarities['similarity_score'] > 0.0)]
+
+            #Drop entries where the similarit score is below the threshold
+            chunk_similarities = chunk_similarities[chunk_similarities['similarity_score'] >= self.similarity_threshold]
+            
+            if len(chunk_similarities) > 0:
+                similarity_results.append(chunk_similarities)
+            
+        #similarity results is a list of dataframes, so we need to concatenate them into a single dataframe (stack the dataframes on top of each other)
+        final_result = pd.concat(similarity_results, ignore_index=True)
+        return final_result
+
 
     def create_movie_genre_similarity_matrix(self):
         print("Creating movie genre similarity matrix...")
@@ -222,7 +286,8 @@ class MoviesPreprocessor:
         dtm = tfidf_vectorizer.fit_transform(genres)
 
         #Create a similarity matrix
-        genres_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
+        self.genres_sims = self.compute_chunked_similarity(df = dtm)
+        """genres_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
         genres_sim_matrix.index = self.movies['tmdb_id'].values
         genres_sim_matrix.columns = self.movies['tmdb_id'].values
 
@@ -231,7 +296,7 @@ class MoviesPreprocessor:
         genres_sims.columns = ['movie1_id', 'movie2_id', 'similarity_score']
 
         #Drop entries where similarity is 0 or similarity is calculated between the same movies
-        self.genres_sims = genres_sims[(genres_sims['movie1_id'] != genres_sims['movie2_id']) & (genres_sims['similarity_score'] > 0.0)]
+        self.genres_sims = genres_sims[(genres_sims['movie1_id'] != genres_sims['movie2_id']) & (genres_sims['similarity_score'] > 0.0)]"""
 
     
     
@@ -247,7 +312,9 @@ class MoviesPreprocessor:
         tfidf_vectorizer = TfidfVectorizer(stop_words = 'english', min_df = 2)
         dtm = tfidf_vectorizer.fit_transform(crew)
 
-        crew_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
+        #Create a similarity matrix
+        self.crew_sims = self.compute_chunked_similarity(df = dtm)
+        """crew_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
         crew_sim_matrix.index = self.movies['tmdb_id'].values
         crew_sim_matrix.columns = self.movies['tmdb_id'].values
 
@@ -256,7 +323,7 @@ class MoviesPreprocessor:
         crew_sims.columns = ['movie1_id', 'movie2_id', 'similarity_score']
 
         #Drop rows where similarity score is 0 (no similarity) or 1 (self similarity)for storage efficiency
-        self.crew_sims = crew_sims[(crew_sims['movie1_id'] != crew_sims['movie2_id']) & (crew_sims['similarity_score'] > 0.0)]
+        self.crew_sims = crew_sims[(crew_sims['movie1_id'] != crew_sims['movie2_id']) & (crew_sims['similarity_score'] > 0.0)]"""
 
 
     def create_movie_content_similarity_matrix(self):
@@ -268,7 +335,9 @@ class MoviesPreprocessor:
         tfidf_vectorizer = TfidfVectorizer(stop_words = 'english', min_df = 0.01)
         dtm = tfidf_vectorizer.fit_transform(content)
 
-        content_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
+        #Create a similarity matrix
+        self.content_sims = self.compute_chunked_similarity(df = dtm)
+        """content_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
         content_sim_matrix.index = self.movies['tmdb_id'].values
         content_sim_matrix.columns = self.movies['tmdb_id'].values
 
@@ -276,12 +345,13 @@ class MoviesPreprocessor:
         content_sims.columns = ['movie1_id', 'movie2_id', 'similarity_score']
 
         # Drop rows where similarity score is 0 (no similarity) or was calculated between the same rows for storage efficiency
-        self.content_sims = content_sims[(content_sims['movie1_id'] != content_sims['movie2_id']) & (content_sims['similarity_score'] > 0.0)]
+        self.content_sims = content_sims[(content_sims['movie1_id'] != content_sims['movie2_id']) & (content_sims['similarity_score'] > 0.0)]"""
 
         
 
     def create_movie_rating_similarity_matrix(self):
         print("Creating movie rating similarity matrix...")
+        #Create a similarity matrix
         correlation_matrix = self.movie_ratings.corr(method = 'pearson', min_periods = 7)
         correlation_matrix.index.name = 'movie1_id'
         correlation_matrix.columns.name = 'movie2_id'

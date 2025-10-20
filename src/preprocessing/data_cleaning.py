@@ -12,12 +12,12 @@ from enum import Enum
 
 class MoviesPreprocessor:
     def __init__(self):
-        #Project directory is 2 levels up from this file
+        #project directory is 2 levels up from this file
         self.project_root = Path(__file__).parent.parent.parent
         self.data_path = self.project_root / 'data'
         self.output_path = self.project_root / 'data_cleaned'
         
-        #Delete the output directory if it already exists
+        #delete the output directory if it already exists
         if self.output_path.exists():
             print(f"Removing existing output directory: {self.output_path}")
             shutil.rmtree(self.output_path) #recursively remove the directory and everything in the directory
@@ -36,9 +36,9 @@ class MoviesPreprocessor:
         self.ratings_sims = None
         self.movie_ratings = None
         
-        # Chunking parameters for memory efficiency
-        self.chunk_size = 1000  # Process 1000 movies at a time
-        self.similarity_threshold = 0.1  # Filter out similarities below this threshold
+        #chunking parameters for memory efficiency
+        self.chunk_size = 1000  #process 1000 movies at a time
+        self.similarity_threshold = 0.1  #filter out similarities below this threshold
 
     def log(self, msg: str):
         tqdm.write(msg)
@@ -50,7 +50,7 @@ class MoviesPreprocessor:
     def load_links_dataset(self):
         self.log("Loading links dataset...")
         self.links = pd.read_csv(self.data_path / 'links_small.csv')
-        #Clean the links dataset
+        #clean the links dataset
         self.links = self.links[self.links['tmdbId'].notnull()]
         self.links['tmdbId'] = self.links['tmdbId'].astype(int)
 
@@ -76,35 +76,35 @@ class MoviesPreprocessor:
     
     def clean_movies(self):
         self.log("Cleaning movies dataset...")
-        # Rename 'id' column to 'tmdb_id'
+        #rename 'id' column to 'tmdb_id'
         self.movies = self.movies.rename(columns={'id': 'tmdb_id'})
 
-        # Convert tmdb_id to numeric, coerce errors to NaN
+        #convert tmdb_id to numeric, coerce errors to NaN
         self.movies['tmdb_id'] = pd.to_numeric(self.movies['tmdb_id'], errors='coerce')
 
-        # Drop rows with missing tmdb_id
+        #drop rows with missing tmdb_id
         self.movies.dropna(subset=['tmdb_id'], inplace=True)
 
-        # Convert tmdb_id to int
+        #convert tmdb_id to int
         self.movies['tmdb_id'] = self.movies['tmdb_id'].astype(int)
 
-        #Drop movies that don't appear in the links dataset to shrink the data size (otherwise there isn't enough RAM to load all of the data into memory)
+        #drop movies that don't appear in the links dataset to shrink the data size (otherwise there isn't enough RAM to load all of the data into memory)
         self.movies = self.movies[self.movies['tmdb_id'].isin(self.links['tmdbId'])]
 
-        # Drop duplicate entries based on imdb_id and tmdb_id
+        #drop duplicate entries based on imdb_id and tmdb_id
         self.movies.drop_duplicates(subset=['imdb_id', 'tmdb_id'], inplace=True)
 
-        # Drop rows where vote_count, vote_average, title, or tmdb_id is missing
+        #drop rows where vote_count, vote_average, title, or tmdb_id is missing
         self.movies.dropna(subset=['vote_count', 'vote_average', 'title', 'tmdb_id'], inplace=True)
 
-        # Drop or rename columns as needed
+        #drop or rename columns as needed
         self.movies.drop(columns=['original_title'], inplace=True, errors='ignore')
 
-        #Convert 'genres' json column to a list of strings
+        #convert 'genres' json column to a list of strings
         self.movies['genres'] = self.movies['genres'].apply(lambda element: eval(element))
         self.movies['genres'] = self.movies['genres'].apply(lambda element: [d['name'] for d in element] if isinstance(element, list) else [])
 
-        # Drop unnecessary columns (ignore if missing)
+        #drop unnecessary columns (ignore if missing)
         self.movies.drop(
             columns=[
                 'belongs_to_collection', 'budget', 'homepage', 'popularity', 'production_companies',
@@ -114,15 +114,15 @@ class MoviesPreprocessor:
             inplace=True, errors='ignore'
         )
 
-        # Combine 'tagline' and 'overview' columns
+        #combine 'tagline' and 'overview' columns
         self.movies['overview'] = self.movies['tagline'].fillna('').str.cat(self.movies['overview'].fillna(''), sep=' ')
         self.movies.drop(columns=['tagline'], inplace=True, errors='ignore')
 
-        # Turn the overview column into a list of stemmed words
+        #turn the overview column into a list of stemmed words
         self.movies['overview'] = self.movies['overview'].str.split()
         self.movies['overview'] = self.movies['overview'].apply(lambda l: [self.stemmer.stem(word.strip(string.punctuation)) for word in l])
 
-        # Calculate the imdb score
+        #calculate the imdb score
         min_votes = self.movies['vote_count'].quantile(0.90)
         overall_vote_average = self.movies['vote_average'].mean()
         imdb_score = (
@@ -133,76 +133,76 @@ class MoviesPreprocessor:
         unqualified_movies = self.movies['vote_count'] < min_votes
         self.movies.loc[unqualified_movies, 'imdb_score'] = np.nan
 
-        # Drop the vote_count and vote_average columns after calculating the imdb score
+        #drop the vote_count and vote_average columns after calculating the imdb score
         self.movies.drop(columns=['vote_count', 'vote_average'], inplace=True, errors='ignore')
 
 
     def clean_keywords(self):
         self.log("Cleaning keywords dataset...")
-        #Convert the keywords column from a json object to a list of dictionaries
+        #convert the keywords column from a json object to a list of dictionaries
         self.keywords['keywords'] = self.keywords['keywords'].apply(lambda element: eval(element))
         
-        #Rename the 'id' column to 'tmdb_id'
+        #rename the 'id' column to 'tmdb_id'
         self.keywords = self.keywords.rename(columns={'id': 'tmdb_id'})
 
-        #Drop movies in the keywords table whose tmdb_id don't appear in the movies dataset (to avoid primary key error)
+        #drop movies in the keywords table whose tmdb_id don't appear in the movies dataset (to avoid primary key error)
         self.keywords = self.keywords[self.keywords['tmdb_id'].isin(self.movies['tmdb_id'])]
 
-        #Turn the keywords column into a list of stemmed words
+        #turn the keywords column into a list of stemmed words
         self.keywords['keywords'] = self.keywords['keywords'].apply(lambda element: [d['name'] for d in element] if isinstance(element, list) else [])
 
-        #Filter out the keywords that only appear once in the movie dataset (not useful for finding similar movies)
+        #filter out the keywords that only appear once in the movie dataset (not useful for finding similar movies)
         all_keywords = self.keywords['keywords'].apply(lambda l: pd.Series(l)).stack().value_counts()
         unique_keywords = all_keywords[all_keywords == 1]
         self.keywords['keywords'] = self.keywords['keywords'].apply(lambda l: [element for element in l if element not in unique_keywords.index])
 
-        #Stem each of the keywords"""
+        #stem each of the keywords so that there are less duplicated features in the TF-IDF matrix"""
         self.keywords['keywords'] = self.keywords['keywords'].apply(lambda l: [self.stemmer.stem(word) for word in l])
 
 
     def clean_credits(self):
         self.log("Cleaning credits dataset...")
-        #Convert the cast and crew columns from a json object to a list of dictionaries
+        #convert the cast and crew columns from a json object to a list of dictionaries
         self.credits['cast'] = self.credits['cast'].apply(lambda element: eval(element))
         self.credits['crew'] = self.credits['crew'].apply(lambda element: eval(element))
 
-        #Make a new column for the directors
+        #make a new column for the directors
         self.credits['director'] = self.credits['crew'].apply(lambda element: [d['name'] for d in element if 'director' in d['job'].lower()] if isinstance(element, list) else [])
         
-        #Turn the director names into a single string not seperated by spaces (otherwise first and last name will be treated as different terms in TF-IDF vectorization)"""
+        #turn the director names into a single string not seperated by spaces (otherwise first and last name will be treated as different terms in TF-IDF vectorization)"""
         self.credits['director'] = self.credits['director'].apply(lambda l: [''.join(fullname.split()) for fullname in l])
 
-        #Drop the directors that only appear once in the dataset (not useful for finding similar movies)
+        #drop the directors that only appear once in the dataset (not useful for finding similar movies within the dataset)
         director_name_counts = self.credits['director'].apply(lambda l: pd.Series(l)).stack().value_counts()
         unique_directors = director_name_counts[director_name_counts == 1]
         self.credits['director'] = self.credits['director'].apply(lambda l: [element for element in l if element not in unique_directors.index][0:3]) #Take the top 3 directors
 
-        #Make a new column for the actors
+        #make a new column for the actors
         actors = self.credits['cast'].apply(lambda l: [d['name'] for d in l if 'character' in d.keys() and d['character'] != ''][0:10]) #take the top 10 actors
         actors = actors.apply(lambda l: [''.join(fullname.split()) for fullname in l])
         self.credits['actors'] = actors
 
-        #Rename the 'id' column to 'tmdb_id'
+        #rename the 'id' column to 'tmdb_id'
         self.credits = self.credits.rename(columns={'id': 'tmdb_id'})
 
-        #Drop movies in the credits table whose tmdb_id don't appear in the movies dataset (to avoid primary key error)
+        #drop movies in the credits table whose tmdb_id don't appear in the movies dataset (to avoid primary key error)
         self.credits = self.credits[self.credits['tmdb_id'].isin(self.movies['tmdb_id'])]
 
 
-        #Director should be weighted twice as much as the actors
+        #director should be weighted twice as much as the actors so that it contributes more to the direction of the vector and thus the cosine similarity score
         self.credits['director'] = self.credits['director'] * 2
         self.credits.head()
 
 
     def clean_movie_ratings(self):
         self.log("Cleaning movie ratings dataset...")
-        # Rename movieId to tmdb_id first
+        #rename movieId to tmdb_id
         self.movie_ratings.rename(columns={'movieId': 'tmdb_id'}, inplace=True)
         
-        # Filter to only include movies that exist in the movies dataset
+        #filter to only include movies that exist in the movies dataset
         self.movie_ratings = self.movie_ratings[self.movie_ratings['tmdb_id'].isin(self.movies['tmdb_id'])]
         
-        # Create pivot table
+        #create a pivot table
         self.movie_ratings = self.movie_ratings.pivot_table(index='userId', columns='tmdb_id', values='rating')
 
 
@@ -211,9 +211,9 @@ class MoviesPreprocessor:
         self.movies = self.movies.merge(self.keywords, on = 'tmdb_id', how = 'inner')  
         self.movies = self.movies.merge(self.credits.loc[:, ['tmdb_id', 'actors', 'director']], on='tmdb_id', how='left')
         
-        #If the left join is not perfect, the actors and director columns will be filled with an empty list
-        self.movies['actors'] = self.movies['actors'].apply(lambda x: x if isinstance(x, list) else [])
-        self.movies['director'] = self.movies['director'].apply(lambda x: x if isinstance(x, list) else [])
+        #if the left join is not perfect and there are some null values, the actors and director columns will be filled with an empty list
+        self.movies['actors'] = self.movies['actors'].apply(lambda element: element if isinstance(element, list) else [])
+        self.movies['director'] = self.movies['director'].apply(lambda element: element if isinstance(element, list) else [])
 
     def compute_chunked_similarity(self, df):
         """
@@ -233,7 +233,7 @@ class MoviesPreprocessor:
             chunk_similarities_matrix.index = self.movies['tmdb_id'][chunk_start:chunk_end].values #rows correspond to the movies in the current chunk
             chunk_similarities_matrix.columns = self.movies['tmdb_id'].values  # columns correspond to all the movies in the dataset
             
-            #Reshape the similarity matrix to have columns (movie1_id, movie2_id, similarity_score)
+            #reshape the similarity matrix to have columns (movie1_id, movie2_id, similarity_score)
             chunk_similarities = chunk_similarities_matrix.stack().reset_index()
             chunk_similarities.columns = ['movie1_id', 'movie2_id', 'similarity_score']
             """
@@ -257,13 +257,13 @@ class MoviesPreprocessor:
 
             """
 
-            #Drop entries where similarity is 0 or similarity is calculated between the same movies
+            #drop entries where the similarity score is 0 or the similarity score is calculated between the same movies
             chunk_similarities = chunk_similarities[(chunk_similarities['movie1_id'] != chunk_similarities['movie2_id']) & (chunk_similarities['similarity_score'] > 0.0)]
 
             #clip the similarity scores to a valid range of [-1, 1] in case floating-point precision errors occur
             chunk_similarities['similarity_score'] = chunk_similarities['similarity_score'].clip(-1.0, 1.0)
 
-            #Drop entries where the similarit score is below the threshold
+            #drop entries where the similarity score is below the threshold
             chunk_similarities = chunk_similarities[chunk_similarities['similarity_score'] >= self.similarity_threshold]
             
             if len(chunk_similarities) > 0:
@@ -276,83 +276,52 @@ class MoviesPreprocessor:
 
     def create_movie_genre_similarity_matrix(self):
         self.log("Creating movie genre similarity matrix...")
-        #Turn the entries of the genres column into a single string, where individual genres are seperated by spaces
+        #turn the entries of the genres column into a single string, where individual genres are seperated by spaces
         genres = self.movies['genres'].apply(lambda l: ' '.join(l) if isinstance(l, list) else '')
 
-        #Drop the genres column in the movies dataset
+        #drop the genres column in the movies dataset
         self.movies.drop(columns = ['genres'], inplace = True)
 
-        #Create a TF-IDF vectorizer
+        #create a TF-IDF vectorizer
         tfidf_vectorizer = TfidfVectorizer(stop_words = 'english', ngram_range = (1, 2), min_df = 0.01)
         dtm = tfidf_vectorizer.fit_transform(genres)
 
-        #Create a similarity matrix
+        #create a similarity matrix
         self.genres_sims = self.compute_chunked_similarity(df = dtm)
-        """genres_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
-        genres_sim_matrix.index = self.movies['tmdb_id'].values
-        genres_sim_matrix.columns = self.movies['tmdb_id'].values
-
-        #Reshape the similarity matrix to have columns (movie1_id, movie2_id, similarity_score)
-        genres_sims = genres_sim_matrix.stack().reset_index()
-        genres_sims.columns = ['movie1_id', 'movie2_id', 'similarity_score']
-
-        #Drop entries where similarity is 0 or similarity is calculated between the same movies
-        self.genres_sims = genres_sims[(genres_sims['movie1_id'] != genres_sims['movie2_id']) & (genres_sims['similarity_score'] > 0.0)]"""
-
-    
     
     def create_movie_crew_similarity_matrix(self):
         self.log("Creating movie crew similarity matrix...")
-        #Combine the entries of the director and actors columns into a single list, then merge that list into a string
+        #combine the entries of the director and actors columns into a single list, then merge that list into a string
         crew = self.movies.apply(lambda row: row['director'] + row['actors'], axis=1)
         crew = crew.apply(lambda x: ' '.join(x))
                                                 
-        #Drop the director and actors columns from the movies dataset
+        #Ddrop the director and actors columns from the movies dataset
         self.movies = self.movies.drop(columns = ['director', 'actors'])
 
         tfidf_vectorizer = TfidfVectorizer(stop_words = 'english', min_df = 2)
         dtm = tfidf_vectorizer.fit_transform(crew)
 
-        #Create a similarity matrix
+        #create a similarity matrix
         self.crew_sims = self.compute_chunked_similarity(df = dtm)
-        """crew_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
-        crew_sim_matrix.index = self.movies['tmdb_id'].values
-        crew_sim_matrix.columns = self.movies['tmdb_id'].values
-
-        #Reshape the similarity matrix to have columns (movie1_id, movie2_id, similarity_score)
-        crew_sims = crew_sim_matrix.stack().reset_index()
-        crew_sims.columns = ['movie1_id', 'movie2_id', 'similarity_score']
-
-        #Drop rows where similarity score is 0 (no similarity) or 1 (self similarity)for storage efficiency
-        self.crew_sims = crew_sims[(crew_sims['movie1_id'] != crew_sims['movie2_id']) & (crew_sims['similarity_score'] > 0.0)]"""
+        
 
 
     def create_movie_content_similarity_matrix(self):
         self.log("Creating movie content similarity matrix...")
-        #Create a content series by combining the keywords with the overview column, giving overview a higher weight
+        #create a content series by combining the keywords with the overview column, giving overview a higher weight since it is more likely to be important
+        #important features are scaled up to dominate the vectors directions (contribute more to cosine similarity calculations)
         content = self.movies.apply(lambda row: row['keywords'] + row['overview'] * 2, axis = 1)
         content = content.apply(lambda x: ' '.join(x))
 
         tfidf_vectorizer = TfidfVectorizer(stop_words = 'english', min_df = 0.01)
         dtm = tfidf_vectorizer.fit_transform(content)
 
-        #Create a similarity matrix
+        #create a similarity matrix
         self.content_sims = self.compute_chunked_similarity(df = dtm)
-        """content_sim_matrix = pd.DataFrame(cosine_similarity(dtm, dense_output = True))
-        content_sim_matrix.index = self.movies['tmdb_id'].values
-        content_sim_matrix.columns = self.movies['tmdb_id'].values
-
-        content_sims = content_sim_matrix.stack().reset_index()
-        content_sims.columns = ['movie1_id', 'movie2_id', 'similarity_score']
-
-        # Drop rows where similarity score is 0 (no similarity) or was calculated between the same rows for storage efficiency
-        self.content_sims = content_sims[(content_sims['movie1_id'] != content_sims['movie2_id']) & (content_sims['similarity_score'] > 0.0)]"""
-
-        
 
     def create_movie_rating_similarity_matrix(self):
         self.log("Creating movie rating similarity matrix...")
-        #Create a similarity matrix
+        #create a similarity matrix
         correlation_matrix = self.movie_ratings.corr(method = 'pearson', min_periods = 7)
         correlation_matrix.index.name = 'movie1_id'
         correlation_matrix.columns.name = 'movie2_id'
@@ -363,12 +332,12 @@ class MoviesPreprocessor:
         #clip the similarity scores to a valid range of [-1, 1] in case floating-point precision errors occur
         ratings_sims['similarity_score'] = ratings_sims['similarity_score'].clip(-1.0, 1.0)
 
-        #Drop rows where similarity score is 0 (no similarity) or similarity is calculated between the same movies for storage efficiency
+        #drop rows where similarity score is 0 (no similarity) or similarity is calculated between the same movies for storage efficiency
         self.ratings_sims = ratings_sims[(ratings_sims['movie1_id'] != ratings_sims['movie2_id']) & (ratings_sims['similarity_score'] > 0.0)]
 
     def update_movies_dataset(self):
         self.log("Updating movies dataset...")
-        #Don't need the overview and keywords columns after the similarity matrices are created
+        #don't need the overview and keywords columns after the similarity matrices are created
         self.movies = self.movies.drop(columns = ['overview', 'keywords'])
         self.movies = self.movies.drop_duplicates(subset = ['tmdb_id'])
 
@@ -386,7 +355,7 @@ class MoviesPreprocessor:
         """Remove symmetric duplicates by canonicalizing pairs so movie1_id < movie2_id"""
         self.log("Deduplicating similarity pairs...")
         def _dedupe(df):
-            # Canonical order: ensure movie1_id < movie2_id
+            
             min_ids = df.loc[:, ['movie1_id', 'movie2_id']].min(axis=1) #goes row by row and chooses the smaller of movie1_id and movie2_id, returning a series
             max_ids = df.loc[:, ['movie1_id', 'movie2_id']].max(axis=1) #goes row by row and chooses the larger of movie1_id and movie2_id, returning a series
             
@@ -394,13 +363,13 @@ class MoviesPreprocessor:
             df = df.copy()
             df['movie1_id'] = min_ids
             df['movie2_id'] = max_ids
-            #Now, the movie1_id column will contain the smaller of the two ids and the movie2_id column will contain the larger of the two ids
+            #now, the movie1_id column will contain the smaller of the two ids and the movie2_id column will contain the larger of the two ids
             
-            # Keep one row per unordered pair, prefer highest similarity if available
+            #keep one row per unordered pair, preferring the highest similarity if multiple are there
             df = df.sort_values('similarity_score', ascending=False).drop_duplicates(subset=['movie1_id', 'movie2_id'], keep='first')
             return df
 
-        # Apply to all similarity DataFrames
+        #dedupe all similarity dataframes
         self.genres_sims = _dedupe(self.genres_sims)
         self.crew_sims = _dedupe(self.crew_sims)
         self.content_sims = _dedupe(self.content_sims)
@@ -434,28 +403,27 @@ class MoviesPreprocessor:
     
     def enforce_foreign_keys(self):
         print("Enforcing foreign keys...")
-        # movies_cleaned.csv contain the primary key (tmdb_id) for the other tables
-        # The other tables' foreign keys (movie1_id and movie2_id) should only contain values of tmdb_id that appear in movies_cleaned.csv
+        #movies_cleaned.csv contain the primary key (tmdb_id) for the other tables
+        #the other tables' foreign keys (movie1_id and movie2_id) should only contain values of tmdb_id that appear in movies_cleaned.csv
         valid_ids = set(pd.to_numeric(self.movies['tmdb_id'], errors='coerce').dropna().astype(int).values)
 
         def _coerce_and_filter(df, col_names):
             if df is None or len(df) == 0:
                 return df
 
-            # Coerce id columns to numeric -> int, drop non-numeric
             for col in col_names:
-                # Coerce id columns to numeric -> int
+                #coerce id columns to numeric -> int
                 df[col] = pd.to_numeric(df[col], errors='coerce')
                 df[col] = df[col].astype(int)
-                # Filter out rows where the id columns (movie1_id or movie2_id) are not in the valid_ids set
+                #filter out rows where the id columns (movie1_id or movie2_id) are not in the valid_ids set
                 df = df[df[col].isin(valid_ids)]
 
-            # Drop rows where any of the id columns are NaN
+            #drop rows where any of the id columns (movie1_id or movie2_id) are NaN
             df = df.dropna(subset=[c for c in col_names])
                         
             return df
 
-        # Apply to all similarity DataFrames
+        #enforce foreigh keys for all similarity dataframes
         self.genres_sims = _coerce_and_filter(self.genres_sims, ['movie1_id', 'movie2_id'])
         self.crew_sims = _coerce_and_filter(self.crew_sims, ['movie1_id', 'movie2_id'])
         self.content_sims = _coerce_and_filter(self.content_sims, ['movie1_id', 'movie2_id'])
@@ -470,8 +438,15 @@ class MoviesPreprocessor:
         self.content_sims['similarity_score'] = self.content_sims['similarity_score'].round(decimal_places)
         self.ratings_sims['similarity_score'] = self.ratings_sims['similarity_score'].round(decimal_places)
 
+    def save_processed_data(self):
+        self.log("Saving processed data...")
+        self.movies.to_csv(self.output_path / 'movies_cleaned.csv', index=False)
+        self.genres_sims.to_csv(self.output_path / 'genres_sims_cleaned.csv', index=False)
+        self.crew_sims.to_csv(self.output_path / 'crew_sims_cleaned.csv', index=False)
+        self.content_sims.to_csv(self.output_path / 'content_sims_cleaned.csv', index=False)
+        self.ratings_sims.to_csv(self.output_path / 'ratings_sims_cleaned.csv', index=False)
+
     def execute_preprocessing_pipeline(self):
-        #Preprocessing pipeline order
         steps = [
             self.load_all_datasets,
             self.clean_movies,
@@ -489,25 +464,15 @@ class MoviesPreprocessor:
             self.keep_top_k_neighbors,
             self.enforce_foreign_keys,
             self.round_similarity_scores,
-            self.replace_nan_with_none
+            self.replace_nan_with_none,
+            self.save_processed_data
         ]
 
-        # Iterate with progress bar
-        for step in tqdm(steps, desc="Preprocessing Pipeline Progress"):
-            step()  # execute the method
+        #iterate over each step in the preprocessing pipeline with progress bar
+        for step in tqdm(steps, desc="PROGRESS"):
+            step()
 
-
-if __name__ == '__main__':
-    preprocessor = MoviesPreprocessor()
-    preprocessor.execute_preprocessing_pipeline()
-    #print(preprocessor.movies.head())
     
-    # Export cleaned data using relative paths
-    preprocessor.movies.to_csv(preprocessor.output_path / 'movies_cleaned.csv', index=False)
-    preprocessor.genres_sims.to_csv(preprocessor.output_path / 'genres_sims_cleaned.csv', index=False)
-    preprocessor.crew_sims.to_csv(preprocessor.output_path / 'crew_sims_cleaned.csv', index=False)
-    preprocessor.content_sims.to_csv(preprocessor.output_path / 'content_sims_cleaned.csv', index=False)
-    preprocessor.ratings_sims.to_csv(preprocessor.output_path / 'ratings_sims_cleaned.csv', index=False)
     
 
        

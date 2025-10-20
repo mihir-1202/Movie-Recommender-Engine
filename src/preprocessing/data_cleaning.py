@@ -12,9 +12,7 @@ from enum import Enum
 
 #TODO: for similarity matrices, drop rows where similarity score is below a certain threshold in order to reduce the size of the matrices
 
-class SimilarityMethod(Enum):
-    COSINE_SIMILARITY = 'cosine-similarity'
-    PEARSON_CORRELATION = 'pearson-correlation'
+
 
 class MoviesPreprocessor:
     def __init__(self):
@@ -218,7 +216,7 @@ class MoviesPreprocessor:
         self.movies['actors'] = self.movies['actors'].apply(lambda x: x if isinstance(x, list) else [])
         self.movies['director'] = self.movies['director'].apply(lambda x: x if isinstance(x, list) else [])
 
-    def compute_chunked_similarity(self, df, method = SimilarityMethod.COSINE_SIMILARITY):
+    def compute_chunked_similarity(self, df):
         """
         Compute cosine similarity in chunks to avoid memory overload.
         Returns a DataFrame with columns: movie1_id, movie2_id, similarity_score
@@ -231,6 +229,7 @@ class MoviesPreprocessor:
             chunk_end = min(chunk_start + self.chunk_size, n_movies)
             chunk = df[chunk_start:chunk_end]
             
+            #calculate the cosine similarity between the movies in the current chunk and all the movies in the dataset
             chunk_similarities_matrix = pd.DataFrame(cosine_similarity(chunk, df, dense_output = True))
             chunk_similarities_matrix.index = self.movies['tmdb_id'][chunk_start:chunk_end].values #rows correspond to the movies in the current chunk
             chunk_similarities_matrix.columns = self.movies['tmdb_id'].values  # columns correspond to all the movies in the dataset
@@ -384,36 +383,6 @@ class MoviesPreprocessor:
         self.content_sims.fillna(value = '\\N', inplace = True)
         self.ratings_sims.fillna(value = '\\N', inplace = True)
 
-    
-    def enforce_foreign_keys(self):
-        print("Enforcing foreign keys...")
-        # movies_cleaned.csv contain the primary key (tmdb_id) for the other tables
-        # The other tables' foreign keys (movie1_id and movie2_id) should only contain values of tmdb_id that appear in movies_cleaned.csv
-        valid_ids = set(pd.to_numeric(self.movies['tmdb_id'], errors='coerce').dropna().astype(int).values)
-
-        def _coerce_and_filter(df, col_names):
-            if df is None or len(df) == 0:
-                return df
-
-            # Coerce id columns to numeric -> int, drop non-numeric
-            for col in col_names:
-                # Coerce id columns to numeric -> int
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-                df[col] = df[col].astype(int)
-                # Filter rows to only valid ids present in movies
-                df = df[df[col].isin(valid_ids)]
-
-            # Drop rows where any of the id columns are NaN
-            df = df.dropna(subset=[c for c in col_names])
-                        
-            return df
-
-        # Apply to all similarity DataFrames
-        self.genres_sims = _coerce_and_filter(self.genres_sims, ['movie1_id', 'movie2_id'])
-        self.crew_sims = _coerce_and_filter(self.crew_sims, ['movie1_id', 'movie2_id'])
-        self.content_sims = _coerce_and_filter(self.content_sims, ['movie1_id', 'movie2_id'])
-        self.ratings_sims = _coerce_and_filter(self.ratings_sims, ['movie1_id', 'movie2_id'])
-
     def deduplicate_similarity_pairs(self):
         """Remove symmetric duplicates by canonicalizing pairs so movie1_id < movie2_id"""
         print("Deduplicating similarity pairs...")
@@ -440,15 +409,67 @@ class MoviesPreprocessor:
 
     def filter_similarity_matrix(self):
         """Filter the similarity matrices to only include rows where the similarity score is greater than or equal to the threshold (if the similarity score is below the threshold, the similarity is considered)"""
+        threshold_similarity_score = 0.1
         def _filter(df, threshold):
             df = df[df['similarity_score'] >= threshold]
             return df
-        print("Filtering similarity matrices...")
-        self.genres_sims = _filter(self.genres_sims, 0.1)
-        self.crew_sims = _filter(self.crew_sims, 0.1)
-        self.content_sims = _filter(self.content_sims, 0.1)
-        self.ratings_sims = _filter(self.ratings_sims, 0.1)
 
+        print("Filtering similarity matrices...")
+
+        self.genres_sims = _filter(self.genres_sims, threshold_similarity_score)
+        self.crew_sims = _filter(self.crew_sims, threshold_similarity_score)
+        self.content_sims = _filter(self.content_sims, threshold_similarity_score)
+        self.ratings_sims = _filter(self.ratings_sims, threshold_similarity_score)
+
+    def keep_top_k_neighbors(self):
+        """Keep the top k most similar movies for each movie in the similarity matrix"""
+        def _keep_top_k(df, k):
+            df = df.sort_values('similarity_score', ascending = False).groupby('movie1_id', group_keys = False).head(k)
+            return df
+            #sort the moives in ascending order based on similarity score, group by movie1_id, and keep the top k most similar movies in each group
+        
+        self.genres_sims = _keep_top_k(df = self.genres_sims, k = 150) #moives are either very dissimilar or very similar in terms of genres (genre isnt very nuanced, so we dont need to keep that many similar movies)
+        self.crew_sims = _keep_top_k(df = self.crew_sims, k = 200) #people often seek out movies with similar casts, so keep the top 200
+        self.content_sims = _keep_top_k(df = self.content_sims, k = 200) #content is more nuanced than genres and cast, so we need to keep the top 200
+        self.ratings_sims = _keep_top_k(df = self.ratings_sims, k = 150)
+    
+    def enforce_foreign_keys(self):
+        print("Enforcing foreign keys...")
+        # movies_cleaned.csv contain the primary key (tmdb_id) for the other tables
+        # The other tables' foreign keys (movie1_id and movie2_id) should only contain values of tmdb_id that appear in movies_cleaned.csv
+        valid_ids = set(pd.to_numeric(self.movies['tmdb_id'], errors='coerce').dropna().astype(int).values)
+
+        def _coerce_and_filter(df, col_names):
+            if df is None or len(df) == 0:
+                return df
+
+            # Coerce id columns to numeric -> int, drop non-numeric
+            for col in col_names:
+                # Coerce id columns to numeric -> int
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+                df[col] = df[col].astype(int)
+                # Filter out rows where the id columns (movie1_id or movie2_id) are not in the valid_ids set
+                df = df[df[col].isin(valid_ids)]
+
+            # Drop rows where any of the id columns are NaN
+            df = df.dropna(subset=[c for c in col_names])
+                        
+            return df
+
+        # Apply to all similarity DataFrames
+        self.genres_sims = _coerce_and_filter(self.genres_sims, ['movie1_id', 'movie2_id'])
+        self.crew_sims = _coerce_and_filter(self.crew_sims, ['movie1_id', 'movie2_id'])
+        self.content_sims = _coerce_and_filter(self.content_sims, ['movie1_id', 'movie2_id'])
+        self.ratings_sims = _coerce_and_filter(self.ratings_sims, ['movie1_id', 'movie2_id'])
+    
+    def round_similarity_scores(self):
+        decimal_places = 3
+        print("Rounding similarity scores to 3 decimal places...")
+
+        self.genres_sims['similarity_score'] = self.genres_sims['similarity_score'].round(decimal_places)
+        self.crew_sims['similarity_score'] = self.crew_sims['similarity_score'].round(decimal_places)
+        self.content_sims['similarity_score'] = self.content_sims['similarity_score'].round(decimal_places)
+        self.ratings_sims['similarity_score'] = self.ratings_sims['similarity_score'].round(decimal_places)
 
     def execute_preprocessing_pipeline(self):
         #Preprocessing pipeline order
@@ -464,9 +485,11 @@ class MoviesPreprocessor:
             self.create_movie_content_similarity_matrix,
             self.create_movie_rating_similarity_matrix,
             self.update_movies_dataset,
-            self.enforce_foreign_keys,
             self.deduplicate_similarity_pairs,
             self.filter_similarity_matrix,
+            self.keep_top_k_neighbors,
+            self.enforce_foreign_keys,
+            self.round_similarity_scores,
             self.replace_nan_with_none
         ]
 
